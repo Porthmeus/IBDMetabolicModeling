@@ -1,0 +1,129 @@
+
+```{r }
+# Porthmeus
+# 2.12.22
+
+# the idea is to generate a RF model on the produced metabolite data from Samer which we can feed the intervention data to evaluate an overall improvement in HB/Mayo
+
+require(data.table)
+require(caret)
+
+# fluxes
+fluxes <- read.csv("../../../resources/future.eMed_outflux.csv", row.names = 1)
+
+# meta
+clinic <- fread("../../../resources/ClinicalDataMergeLongImputeCor.csv")
+idconv <- fread("../../../resources/IdentifierConversion.csv")
+
+metabolites <- fread("https://raw.githubusercontent.com/jotech/gapseq/master/dat/seed_metabolites.tsv")[,.(id, name)]
+metabolites2 <- fread("https://raw.githubusercontent.com/jotech/gapseq/master/dat/nutrients.tsv")[,.(id,name)]
+metabolites <- rbind(metabolites,metabolites2)[!duplicated(id),]
+
+
+# create clusters for the fluxes
+## remove near zero variance
+nzv <- nearZeroVar(fluxes)
+fluxes <- fluxes[,-nzv]
+
+fluxes <- data.table(fluxes, keep.rownames = TRUE)
+fluxes[,rn := gsub("^X","",rn)]
+fluxes.merged <- merge(fluxes, idconv, by.x = "rn", by.y = "sample")
+fluxes.merged[, PatientID_Time := paste(Cohort, Person.Numbercode, Time_seq, sep = "_")]
+fluxes.merged <- merge(fluxes.merged, clinic, by = "PatientID_Time")
+
+# split the data set into test and training (10/90)
+# first generate a clean data set without the meta data
+fluxes.cn <- colnames(fluxes)[-1]
+dat.clean <- cbind(fluxes.merged[,HB_Mayo_impu], fluxes.merged[,..fluxes.cn])
+
+# get a training and a test set
+train.ids <- unlist(createDataPartition(fluxes.merged[,HB_Mayo_impu], p = 0.9, list = TRUE))
+test <- dat.clean[-train.ids,]
+train <- dat.clean[train.ids,]
+
+# get the right folding by patients
+patientGrouping <- fluxes.merged[train.ids,PatientID]
+kfolds <- groupKFold(group = patientGrouping, k = 5)
+
+# fit the model
+fit.rf <- train(
+                x = train[,-1],
+                y = train[[1]],
+                method = "ranger",
+                trControl = trainControl(method = "LGOCV",
+                                         #number = 5,
+                                         #search = "random",
+                                         index = kfolds
+                                         #tuneLength = 10
+                                         )
+                )
+
+saveRDS(fit.rf, file = "../results/outflux.RF.HBMayo.etiology_model.RDS")
+
+# now load the interventions and feed them into the model
+# load the data and correct some naming
+fluxes.cn <- gsub("EX_(.*)_e0","\\1",colnames(fluxes)[-1])
+flux.changes <- fread("../../../resources/absoluteChange.longTab.csv.gz")
+flux.changes <- flux.changes[grep("_o$", metabolite.name),]
+flux.changes[,metabolite.name := gsub("_o$", "", metabolite.name)]
+flux.changes[,sample := gsub("^X","",sample)]
+
+# create a real matrix from the acutal flux data
+mat.fluxes.rn  <- fluxes[[1]]
+mat.fluxes <- as.matrix(fluxes[,-1])
+rownames(mat.fluxes) <- mat.fluxes.rn
+colnames(mat.fluxes) <- fluxes.cn
+
+# go through the interventions and calculate the flux values after intervention
+# feed these into the RF and predict HB/Mayo
+inters <- flux.changes[,unique(intervention)]
+results <- list()
+for(inter in inters){
+    mat.changes <- flux.changes[intervention == inter & metabolite.name %in% fluxes.cn,]
+    mat.changes <- dcast(mat.changes, sample~metabolite.name, value.var = "flux.change")
+    mat.changes.rn <- mat.changes[[1]]
+    mat.changes <- as.matrix(mat.changes[,-1])
+    rownames(mat.changes) <- mat.changes.rn
+    # add 0 in those columns which are missing
+    missing.clm <- setdiff(colnames(mat.fluxes),colnames(mat.changes))
+    missing.mat <- matrix(0, nrow = nrow(mat.changes), ncol =length(missing.clm),dimnames=list(rownames(mat.changes), missing.clm))
+    mat.changes <- cbind(mat.changes, missing.mat)
+    ## add the changes to the initial flux
+    common.rn <- intersect(rownames(mat.changes), rownames(mat.fluxes))
+    flux.intervened <- mat.fluxes[common.rn, colnames(mat.changes)] + mat.changes[common.rn,]
+    colnames(flux.intervened) <- paste("EX_",colnames(flux.intervened),"_e0",sep = "")
+    HBMayo <- predict(fit.rf, flux.intervened)
+    names(HBMayo) <- rownames(flux.intervened)
+    results[[inter]] <- HBMayo
+}
+
+# cast it into a dataframe
+results <- as.data.frame(results)
+
+# add the predicted and the original values
+smpls <- rownames(results)
+original <- fluxes.merged[smpls,HB_Mayo_impu]
+
+clms <- paste0("EX_",fluxes.cn,"_e0")
+smpls.woNA <- smpls[!is.na(original)]
+predicted <- predict(fit.rf,fluxes.merged[smpls.woNA, ..clms])
+predicted.woNA <- rep(NA, length(smpls))
+names(predicted.woNA) <- smpls
+predicted.woNA[smpls.woNA] <- predicted
+results <- cbind(original = original,
+                 predicted = predicted.woNA,
+                 results)
+
+gz <- gzfile(description = "../results/outflux.RF.HBMayo.etiology_predictions.csv.gz","w")
+write.csv(results, file = gz)
+close(gz)
+```
+
+
+
+---
+title: 5.createRFmodelForRegression.R
+author: taube
+date: '2022-12-02'
+
+---

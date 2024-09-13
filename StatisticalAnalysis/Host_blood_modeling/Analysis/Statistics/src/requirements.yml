@@ -1,0 +1,20 @@
+name: PipelineStats
+channels:
+  - r
+  - bioconda
+  - conda-forge
+dependencies:
+  - r-car
+  - r-caret
+  - bioconductor-clusterprofiler
+  - r-cowplot
+  - r-data.table
+  - r-dharma
+  - r-domc
+  - r-doparallel
+  - r-foreach
+  - r-fpc
+  - r-lme4
+  - r-lmertest
+  - r-stringr
+  - r-vegan

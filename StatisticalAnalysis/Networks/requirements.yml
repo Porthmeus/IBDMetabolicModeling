@@ -1,0 +1,14 @@
+name: NetworkStats
+channels:
+  - bioconda
+  - r
+  - conda-forge
+dependencies:
+  - r>=4.2
+  - r-data.table
+  - r-domc
+  - r-doparallel
+  - r-foreach
+  - r-igraph
+  - r-rcolorbrewer
+  - r-visnetwork

@@ -1,0 +1,91 @@
+#!/bin/bash
+#SBATCH --array 3-39
+#SBATCH --job-name=itreat_bacarena_future
+#SBATCH --error=/work_beegfs/sukem066/itreat/log/bacarena.err
+#SBATCH --output=/work_beegfs/sukem066/itreat/log/bacarena.out
+#SBATCH --nodes=1
+#SBATCH --tasks-per-node=1
+#SBATCH --cpus-per-task=1
+#SBATCH --time=2:00:00
+#SBATCH --mem=5G
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=j.zimmermann@iem.uni-kiel.de
+
+module load R cplex glpk
+
+echo task id: $SLURM_ARRAY_TASK_ID
+
+Rscript --default-packages=methods,datasets,utils,grDevices,graphics,stats,R.utils  -e '
+library(base)
+library(methods)
+library(utils)
+library(R.utils)
+library(BacArena)
+library(data.table)
+SYBIL_SETTINGS("SOLVER", "cplexAPI")
+
+#models <- readRDS("/work_beegfs/sukem066/agora/agora_20201201_matjes.RDS")
+diet <- fread("/work_beegfs/sukem066/agora/matjes_gapseq-mucus_bile.csv")
+
+args  <- commandArgs(trailingOnly=TRUE)
+run     <- as.numeric(args[1])
+
+hrgb.match.dt <- fread("~/dat/itreat/dat/16S/Future/asv-hrgm.csv")
+#emed.abund <- fread("~/dat/itreat/dat/16S/EMED/Run16_20_31_30.count_table", select=c(1, run))
+future.abund <- fread("~/dat/itreat/dat/16S/Future/asv-table.csv", select=c(1, run))
+sample <- colnames(future.abund)[2]
+idx <- which(future.abund[,get(sample)] > 10)
+idx2 <- match(future.abund$V1[idx], hrgb.match.dt$ASV)
+abundances <- data.table(asv=future.abund$Representative_Sequence[idx], model=hrgb.match.dt$HRGM[idx2], future.abund[idx, 2, with=F])[model!=""]
+abundances[,rel.abundance:=get(sample)/sum(get(sample))]
+
+# get hrgm
+hrgm.paths <- list.dirs("/work_beegfs/suahn360/2021/HRGM/models/")
+models <- list()
+for(m in unique(abundances$model)){
+    mod.path <- grep(m, hrgm.paths,value=T)
+    mod <- list(readRDS(paste0(mod.path,"/",m,".RDS")))
+    names(mod) <- m
+    models <- append(models, mod)
+}
+
+#
+# old
+#comm_all <- readRDS("/work_beegfs/sukem066/itreat/dat/future_community_models.RDS")
+#comm_all <- readRDS("/work_beegfs/sukem066/itreat/dat/future_comm_all_new.RDS")
+#stopifnot(i <= length(comm_all))
+#abundances <- comm_all[[i]][["models"]]
+#sample <- names(comm_all)[i]
+#print(paste(i, sample, nrow(abundances)))
+
+
+if( is.null(abundances) || nrow(abundances)==0 ){
+  stop(paste0("run=", run, " sample=",sample, " does not contain microbial abundances"))
+  #fwrite(data.table(), paste0("/work_beegfs/sukem066/itreat/bacarena/", sample, "_bacarena_fluxes.csv"), sep="\t")
+}
+
+
+
+
+arena <- Arena(n=100, m=100)                                                    
+for(i in 1:nrow(abundances)){
+  mod  <- models[[which(names(models) == abundances$model[i])]]
+  mod@mod_desc <- mod@mod_name
+  bac  <- Bac(mod, setAllExInf=TRUE)
+  frac <- round(arena@n*arena@m*0.1*abundances$rel.abundance[i])
+  frac <- ifelse(frac < 5, 5, frac) # ensure at least 5 orgs ~workaround
+  arena <- addOrg(arena, bac, amount=frac)
+}
+arena <- addSubs(arena, smax=diet$maxFlux, mediac=paste0("EX_", diet$compounds, "_e0"), unit="mM")
+arena <- addSubs(arena, smax=c(1, 1, 1), mediac=paste0("EX_", c("cpd00359", "cpd00216", "cpd00599"), "_e0"), unit="mM") # add chorismate, indole, salcilate
+sim <- simEnv(arena, time=3, sec_obj="mtf", verbose=F)
+
+flux.dt <- data.table()
+for( j in 1:length(sim@specs) ){
+  rxn_nr <- sim@specs[[j]]@model@react_num
+  id <- abundances$model[match(names(sim@specs)[j], abundances$model)]
+  flux.dt <- rbind(flux.dt, data.table(fluxes=sim@mfluxlist[[4]][[j]][1:rxn_nr], reactions=paste0(id, "_", names(sim@mfluxlist[[4]][[j]])[1:rxn_nr])))
+}
+fwrite(flux.dt[fluxes!=0], paste0("/work_beegfs/sukem066/itreat/bacarena/", sample, "_bacarena_fluxes.csv"), sep="\t")
+
+' $SLURM_ARRAY_TASK_ID

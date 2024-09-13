@@ -1,0 +1,21 @@
+channels:
+    - conda-forge
+    - bioconda
+    - r
+dependencies:
+    - r 
+    - bioconductor-genomicfeatures
+    - bioconductor-biomart
+    - bioconductor-txdb.hsapiens.ucsc.hg19.knowngene
+    - r-rmariadb
+    - r-data.table
+    - r-sybil
+    - r-devtools
+    - r-ggplot2
+    - r-lme4
+    - r-car
+    - r-factominer
+    - r-factoextra
+    - r-psych
+    - r-ggpubr
+    - r-cowplot

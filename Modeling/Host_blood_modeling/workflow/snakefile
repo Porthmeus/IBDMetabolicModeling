@@ -1,0 +1,67 @@
+# A snakemake file to pipe the analysis of different transcriptomes in one framework to analyse the metabolic state of the data.
+
+models_path =  "resources/models"
+diets_path = "resources/diets"
+
+# read the header of the initial read count matrix to obtain the sample names
+# and compare it to the samples which have meta data associated
+import pandas as pd
+import itertools as iter
+import os
+import numpy as np
+#from pip._internal import main as pip
+#try:
+#    import corpse
+#except ImportError:
+#    pip(["install","git+"+"https://github.com/Porthmeus/CORPSE.git"])
+#    import corpse
+
+meta = pd.read_csv("resources/META_emed_future.csv")
+samples = pd.read_csv("resources/RC_emed_future.csv")
+samples = list(iter.compress(list(samples.columns),samples.columns.isin(meta.SeqID)))
+
+models = [os.path.join(models_path,x) for x in os.listdir(models_path) if x.endswith(".xml")]
+modelNames = np.unique([os.path.splitext(os.path.basename(model))[0] for model in models])
+
+diets = [os.path.join(diets_path,x) for x in os.listdir(diets_path) if x.endswith(".csv")]
+dietNames = np.unique([os.path.splitext(os.path.basename(diet))[0].split("_")[1] for diet in diets])
+fva_conditions = ["constr","zeroBiomass"]
+distance_measures = ["dist","jacc"]
+formulas = ["~HB_Mayo_impu","~Remission:Time_seq","~HB_Mayo_impu*Diagnosis"]
+covariables = [" ","*Diagnosis"]
+thrshlds = ["GL25","GL50","GL75","GL10-L50","GL25-L50", "GL10-L50-GU75","GL25-L50-GU75","GL10-L50-GU90","GL25-L50-GU90"] 
+
+#wildcard_constraints:
+#   model = '^[^\.]*$',
+#   diet = '^[^\.]*$',
+#   thrld = '^[^\.]*$'
+
+
+#### test version ####
+#samples = samples[0:3]
+modelNames = ["colormore22", "colormore3D","recon3D"]
+dietNames = ["MatjesAbsorption"]
+#fva_conditions = ["zeroBiomass"]
+#distance = ["dist"]
+#formulas = ["HB_Mayo_impu"]
+#covariables = [" "]
+#thrshlds = ["GL25-L50-GU75"]
+########################
+
+rule main:
+    input:
+        expand("results/RxnExpression/rxnExpr.{thrld}.{model}.csv",
+                thrld = thrshlds, model = modelNames),
+        expand("results/ModelAnalysis/rxnIdMat.{thrld}.{diet}.{model}.csv",
+                thrld = thrshlds, model = modelNames, diet = dietNames),
+        expand("results/FVA/FVA.{thrld}.{diet}.{model}.RDS", 
+                thrld = thrshlds, diet = dietNames, model = modelNames),
+                
+
+include:"rules/createTPMMatrix.smk"
+include:"rules/getCoreRxns.smk"
+include:"rules/getConsistentModel.smk"
+include:"rules/getContextModel.smk"
+include:"rules/countSubsystems2.smk"
+include:"rules/calcFVA_zeroBiomass.smk"
+include:"rules/summarizeFVA.smk"

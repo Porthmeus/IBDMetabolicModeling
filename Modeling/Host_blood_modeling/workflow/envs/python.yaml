@@ -1,0 +1,12 @@
+name: python
+channels:
+    - conda-forge
+    - bioconda
+dependencies:
+    - python=3.8.10
+    - cobra
+    - pandas
+    - numpy
+    - pip
+    - pip:
+        - "--editable git+https://github.com/Porthmeus/CORPSE.git#egg=corpse"

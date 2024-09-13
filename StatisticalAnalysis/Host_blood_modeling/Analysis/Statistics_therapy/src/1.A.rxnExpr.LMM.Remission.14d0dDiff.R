@@ -1,0 +1,108 @@
+# Porthmeus
+# 08.03.22
+
+# use the mapping of the TPM values of the expressed genes to draw conclusions on the usage of the metabolism
+
+# load libraries
+require(data.table)
+require(lme4)
+require(lmerTest)
+require(caret)
+require(foreach)
+require(parallel)
+require(fpc)
+require(car)
+require(cowplot)
+require(pbapply)
+
+# load data
+rxnExpr <- read.csv("../../../results/RxnExpression/rxnExpr.GL10-L50-GU90.colormore3D.csv", row.names = 1)
+
+clinic <- fread("../../../resources/ClinicalData.csv")
+meta <- fread("../../../resources/META_emed_future.csv")
+blcklst <- fread("../../../resources/sampleBlacklist.csv")
+
+# merge meta and clincal data
+meta[,PatientID_Time := paste(PatientID, Time_seq, sep ="_")]
+meta <- meta[Time_seq != -1,]
+meta <- merge(meta,clinic, by="PatientID_Time", all.x=TRUE, suffix = c(".meta",""))
+
+# remove degraded samples
+blckSmpls <- blcklst[relevance < 2, Sample]
+meta <- meta[!(SeqID %in% blckSmpls),]
+rxnExpr <- rxnExpr[,!(colnames(rxnExpr) %in% blckSmpls)]
+meta <- meta[SeqID %in% colnames(rxnExpr),]
+
+# remove all reactions where no information of expression is present
+rxnExpr <- rxnExpr[rowSums(rxnExpr) != 0,]
+
+# remove all nearZeroVariables
+NZV <- nearZeroVar(t(rxnExpr))
+rxnExpr <- rxnExpr[-NZV,]
+
+
+# scale the data
+rxnExpr <- t(scale(t(rxnExpr)))
+
+# read the cluster
+tbl.cluster <-fread("../results/rxnExpr_DBSCAN_Cluster.csv")
+
+# melt the data and merge it with the meta data
+rxnExpr.melt <- melt(data.table(rxnExpr[unique(tbl.cluster[,rep.rxn]),], keep.rownames = TRUE),
+                     id.vars = "rn",
+                     variable.name = "SeqID",
+                     value.name = "Expression")
+
+rxnExpr.melt <- merge(rxnExpr.melt, meta, by = "SeqID")
+rxnExpr.melt <- rxnExpr.melt[Remission != "C" & Time_seq %in% c(0,14),]
+rxnExpr.cast <- dcast(data = rxnExpr.melt, PatientID+rn~paste0("d", Time_seq), value.var ="Expression")
+rxnExpr.cast[,Expression.diff := d14-d0]
+rxnExpr.cast <- merge(rxnExpr.cast, unique(meta[,.(PatientID, Remission)]), by = "PatientID")
+
+
+# fit the models
+
+createMods <-function(rxn){
+    #foreach(rxn = rownames(rxnCount2)) %dopar% {
+    dat.mod <- rxnExpr.cast[rn == rxn,]
+    mod <- tryCatch(glm(data = dat.mod, factor(Remission) ~ Expression.diff, family = "binomial"),
+                    error = function(e){
+                        print(e)
+                        return(NA)
+                    })
+    if(length(mod)==1){
+        return(NA)
+    }
+    stat <- data.table(as.data.frame(coef(summary(mod)))["Expression",],keep.rownames = TRUE)
+    colnames(stat)[1] <- "coef"
+    stat <- cbind(rxn = rxn,
+                  stat)
+    return(stat)
+}
+
+rxns <- unique(rxnExpr.cast[,rn])
+
+threads <- detectCores() - 1
+cl <- makeForkCluster(threads)
+stats <- pblapply(cl = cl, FUN = createMods, rxns)
+stopCluster(cl)
+stats.coef <- data.table(do.call(rbind, stats[!is.na(stats)]))
+stats.coef[,padj := p.adjust(`Pr(>|z|)`,method = "BH")]
+stats.coef[padj <0.05,]
+stats.coef[`Pr(>|z|)` <0.05,]
+
+write.csv(stats.coef, file = "../results/rxnExpr.LMM.Remission.14d0dDiff_coefs.csv")
+
+#save diagnostic plots for all the significant reactions
+#rxns <- stats.coef[padj < 0.05, rxn]
+#pbar <- txtProgressBar(min = 0 , max = length(rxns), style = 3)
+#pdf("../results/rxnExpr.LMM.Remission.Baseline_sigDiagPlots.pdf", width = 8, height= 5)
+#i <- 0 
+#for(rxn in rxns){
+#    mod <- lmer(data = rxnExpr.melt[rn == rxn,],Expression ~ Remission*Time_seq+(1|PatientID))
+#    print(plot_grid(~qqPlot(resid(mod), main = rxn), plot(mod)))
+#    i <- i+1
+#    setTxtProgressBar(pbar, i)
+#}
+#dev.off()
+

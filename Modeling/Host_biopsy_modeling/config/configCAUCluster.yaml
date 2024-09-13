@@ -1,0 +1,2 @@
+matlab_command: "module load matlab/2018b; echo 'loaded matlab'; module load glpk; echo 'loaded GLPK'; matlab"
+cobraToolbox_location: "$HOME/Programs/CobraToolbox/"
