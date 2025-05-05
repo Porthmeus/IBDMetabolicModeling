@@ -1,0 +1,1 @@
+This repository contains the scripts to produce and analyse the data described in Taubenheim et al. "Metabolic modeling reveals a multi-level deregulation of host-microbiome metabolic networks in IBD".
